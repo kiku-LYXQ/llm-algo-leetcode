@@ -15,16 +15,15 @@ RUN apt-get update \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . /workspace
+COPY environment.yml /tmp/environment.yml
 
-RUN conda env create -f environment.yml \
+RUN conda env create -f /tmp/environment.yml \
     && conda clean -afy
 
 SHELL ["bash", "-lc"]
 
 RUN source /opt/conda/etc/profile.d/conda.sh \
-    && conda activate llm_algo \
-    && pip install -r requirements/gpu.txt
+    && conda activate llm_algo_cnb \
+    && python -m pip install --upgrade pip
 
-ENV PATH="/opt/conda/envs/llm_algo/bin:${PATH}"
-
+ENV PATH="/opt/conda/envs/llm_algo_cnb/bin:${PATH}"

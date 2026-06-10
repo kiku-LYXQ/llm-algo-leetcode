@@ -118,6 +118,47 @@
 
 - `README.md`：项目首页和总入口
 - `docs/index.md`：站点首页
+
+## 文档职责图
+
+为了避免把环境说明、维护规则和 CNB 入口写混，当前文档分工如下：
+
+### `docs/guide.md`
+
+- 负责“怎么学、怎么选环境、怎么验证”
+- 统一说明：
+  - 本地 conda
+  - CNB
+  - 在线 Notebook
+  - Docker / 云端 GPU
+- 负责 Chapter 0 / 1 / 2 / 3 的环境决策树和验证顺序
+
+### `cnb/README.md`
+
+- 负责 CNB 的补充说明
+- 说明 CNB 的两层：
+  - `push` / `pull_request`：流水线
+  - `vscode` / `vscode-gpu`：交互环境
+- 负责 CNB 验证顺序和 GPU 入口口径
+
+### `docs/maintenance.md`
+
+- 负责维护规则、发布规则和验证规则
+- 记录：
+  - 本地 / CNB / GPU 的边界
+  - 章节分组和占位规范
+  - 版本来源与测试脚本
+  - 发布前检查清单
+
+### `README.md` / `docs/index.md`
+
+- 负责项目门面和站点导航
+- 只放入口和简短概览，不展开长篇环境说明
+
+### `process/*.md`
+
+- 负责临时记录、交接、阶段总结
+- 不作为学习正文，不进入站点导航
 - `docs/.vitepress/config.mts`：侧边栏和导航
 - `docs/guide.md`：环境与平台说明
 - `docs/contributing.md`：贡献和测试说明

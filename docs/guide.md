@@ -13,6 +13,41 @@
 
 ---
 
+## 环境部署决策树
+
+如果你不知道先选什么环境，按这个顺序判断：
+
+1. **只是先看内容**
+   - 直接用在线站点
+   - 先看 Chapter 0 / 1 的导学页
+
+2. **要做 Chapter 0 / 1**
+   - 优先在线 Notebook
+   - 也可以用本地基础环境
+   - 目标是先把 Python、Jupyter、NumPy 跑通
+
+3. **要做 Chapter 2**
+   - 主路径：本地 conda 环境
+   - 第二选择：CNB 统一环境
+   - 统一一套 Python 依赖
+   - CPU 足够覆盖大多数题；只有少数题才切 GPU
+   - 如果后续要顺手衔接更多 GPU 相关题目，也可以直接走 CNB
+
+4. **要做 Chapter 3**
+   - 优先本地 GPU 或 CNB GPU 入口
+   - 需要 CUDA / Triton / GPU 可见性
+   - 当前 CNB 默认交互环境不等于 GPU 环境
+
+5. **要给团队/课程统一环境**
+   - 优先 CNB / Docker
+   - 目标是“大家按同一套环境跑”
+
+如果还是拿不准，默认顺序是：
+
+**在线阅读 -> 在线 Notebook -> 本地 conda -> CNB CPU -> 本地 GPU / CNB GPU**
+
+---
+
 ## 四层环境分层
 
 ### 1. 轻量学习层
@@ -43,6 +78,7 @@
 - Chapter 2 是 **CPU-first**
 - 已确认至少 `21_Gradient_Checkpointing` 需要 NVIDIA GPU 才能测真实 CUDA 显存峰值
 - 学习时建议尽量使用同一套 Python 依赖，保证练习和验证结果一致
+- 如果不想手动配本地环境，也可以直接用 CNB 作为第二选择
 
 ### 3. 高门槛实验层
 

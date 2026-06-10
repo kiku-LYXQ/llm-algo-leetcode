@@ -1,3 +1,13 @@
+$:
+  vscode:
+    - docker:
+        image: python:3.10
+      runner:
+        tags: cnb:arch:amd64
+      services:
+        - vscode
+        - docker
+
 main:
   push:
     - docker:

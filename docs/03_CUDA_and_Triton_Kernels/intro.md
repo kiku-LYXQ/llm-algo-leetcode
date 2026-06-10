@@ -4,17 +4,15 @@
 
 本章聚焦大模型算子的高性能实现，重点是把 Chapter 2 的算法实现落到 Triton / CUDA / 分布式层。
 
-### 快速入口
+### 零基础过渡 5 Task
 
-- [3.1 Triton 基础](./3_1.md)
-- [3.2 Triton 进阶](./3_2.md)
-- [3.3 Triton 项目](./3_3.md)
-- [3.4 CUDA 与分布式](./3_4.md)
-- [3.5 CUDA 系统扩展](./3_5.md)
-- [Chapter 2 导学](../02_PyTorch_Algorithms/intro.md)
-- [Chapter 1 导学](../01_Hardware_Math_and_Systems/intro.md)
-- [使用指南](../guide.md)
-- [维护与发布手册](../maintenance.md)
+| Task | 对应入口 | 一句话目标 |
+|:---|:---|:---|
+| Task 1 | [3.1 Triton 基础](./3_1.md) | 认识 Triton 的编程模型和基础 kernel 写法。 |
+| Task 2 | [3.1 Triton 基础](./3_1.md) | 从向量加法、RMSNorm、SwiGLU 进入融合算子思维。 |
+| Task 3 | [3.2 Triton 进阶](./3_2.md) | 把 softmax、RoPE、FlashAttention 和 KV cache 串起来。 |
+| Task 4 | [3.3 Triton 项目](./3_3.md) | 学会调试、profiling 和项目化落地。 |
+| Task 5 | [3.4 CUDA 内核与显存优化](./3_4.md) | 进一步进入 CUDA、通信与系统扩展。 |
 
 ### 学习组划分
 
@@ -32,12 +30,6 @@
 - **完整体验**：需要 NVIDIA GPU，且推荐 Linux + CUDA + Triton
 - **代码审计结果**：Chapter 3 的 Triton / CUDA notebook 直接面向 GPU 内核、显存和通信行为，不能把 CPU 作为完整替代
 - **例外说明**：少数页面可能支持 CPU fallback 或仅用于阅读，但不构成 Chapter 3 的标准运行路径
-
-### 学习建议
-
-- 先从 **3.1 -> 3.2** 熟悉 Triton 编程模型
-- 再到 **3.3** 处理调试与项目化问题
-- 最后进入 **3.4 -> 3.5**，把 CUDA、通信与扩展串起来
 
 ### 前置页面
 

@@ -37,6 +37,13 @@ jobs:
         working-directory: ./docs
         run: npm ci
 
+      - name: Sanitize branch name
+        id: sanitize
+        shell: bash
+        run: |
+          safe_name="${GITHUB_REF_NAME//\//-}"
+          echo "safe_name=$safe_name" >> "$GITHUB_OUTPUT"
+
       - name: Build with VitePress
         working-directory: ./docs
         run: npm run docs:build
@@ -44,11 +51,11 @@ jobs:
       - name: Upload preview artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vitepress-preview-${{ github.ref_name }}
+          name: vitepress-preview-${{ steps.sanitize.outputs.safe_name }}
           path: docs/.vitepress/dist
           retention-days: 7
 
       - name: Preview summary
         run: |
           echo "Preview build finished for branch: ${{ github.ref_name }}"
-          echo "Download the artifact named: vitepress-preview-${{ github.ref_name }}"
+          echo "Download the artifact named: vitepress-preview-${{ steps.sanitize.outputs.safe_name }}"

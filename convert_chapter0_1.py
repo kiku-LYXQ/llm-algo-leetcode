@@ -73,7 +73,14 @@ def process_markdown_file(md_path, out_path):
     name = filename.replace('.md', '')
     parts = name.split('_')
     if len(parts) < 2:
-        shutil.copy2(md_path, out_path)
+        with open(md_path, "r", encoding="utf-8") as f:
+            source_text = f.read()
+
+        source_text = re.sub(r'(\]\([^)]+)\.ipynb\)', r'\1.md)', source_text)
+        source_text = source_text.replace('../docs/', '../')
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(source_text)
         return
 
     number = parts[0]

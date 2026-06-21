@@ -43,72 +43,52 @@ import triton.language as tl
 
 
 ```python
+import torch
+import triton
+import triton.language as tl
+
 # ==========================================
 # TODO 1: 添加 triton.autotune 装饰器
-# 提示: 
-# 1. 使用 @triton.autotune 装饰器
-# 2. 提供 configs 列表，包含至少 3 个不同的 triton.Config 配置 (探索不同的 BLOCK_SIZE 和 num_warps 组合)
-# 3. 设置 key 为 ['n_elements']，以便对不同的输入大小缓存最优配置
 # ==========================================
-# @triton.autotune(???)
-
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=2),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8),
+        triton.Config({'BLOCK_SIZE': 4096}, num_warps=8),
+        triton.Config({'BLOCK_SIZE': 8192}, num_warps=16),
+    ],
+    key=['n_elements'],
+)
 @triton.jit
-def vector_add_autotune_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def vector_add_autotune_kernel(
+    x_ptr, y_ptr, out_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
+    
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
-    tl.store(out_ptr + offsets, output, mask=mask)
+    out = x + y
+    tl.store(out_ptr + offsets, out, mask=mask)
 
-def add_triton(x: torch.Tensor, y: torch.Tensor):
-    output = torch.empty_like(x)
-    n_elements = output.numel()
+def add_triton(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    n_elements = x.numel()
+    out = torch.empty_like(x)
     
     # ==========================================
     # TODO 2: 动态计算 grid
     # ==========================================
-    # grid = ???
-    pass
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     
-    return output
-
-# ==========================================
-# 性能测试配置
-# ==========================================
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['size'],  # x 轴作为参数名 (传递给测试函数的参数)
-        x_vals=[2**i for i in range(12, 28, 2)],  # x 轴的取值范围 (向量大小从 4K 到 128M)
-        x_log=True,  # x 轴使用对数刻度
-        line_arg='provider',  # y 轴的多条折线，代表不同的提供商 (PyTorch vs Triton)
-        line_vals=['torch', 'triton'],  # 提供商的具体名称
-        line_names=['PyTorch', 'Triton (Autotuned)'],  # 图例上的名字
-        styles=[('blue', '-'), ('green', '-')],  # 线条样式
-        ylabel='GB/s',  # y 轴标签 (带宽吞吐)
-        plot_name='vector-add-performance',  # 图像的名称前缀
-        args={},  # 传给测试函数的额外固定参数
+    vector_add_autotune_kernel[grid](
+        x, y, out, n_elements
     )
-)
-def benchmark(size, provider):
-    x = torch.randn(size, device='cuda', dtype=torch.float32)
-    y = torch.randn(size, device='cuda', dtype=torch.float32)
-    
-    quantiles = [0.5, 0.2, 0.8] # 记录中位数，20%分位数，80%分位数
-    
-    if provider == 'torch':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles)
-    if provider == 'triton':
-        try:
-            ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_triton(x, y), quantiles=quantiles)
-        except Exception as e:
-            ms, min_ms, max_ms = float('inf'), float('inf'), float('inf')
-        
-    # 计算带宽吞吐 (GB/s): 读取 2 个向量，写入 1 个向量
-    gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6
-    return gbps(ms), gbps(max_ms), gbps(min_ms)
+    return out
 ```
 
 
@@ -121,18 +101,21 @@ def test_autotune_correctness():
         print("⏭️  忽略测试：无 GPU")
         return
     
-    print("\n--- 测试开始 ---")
+    print()
+    print("--- 测试开始 ---")
     try:
-        x = torch.randn(10000, device='cuda')
-        y = torch.randn(10000, device='cuda')
-        z = add_triton(x, y)
-        assert torch.allclose(x + y, z), "❌ Autotune 算子输出不正确"
+        for size in [10000, 257]:
+            x = torch.randn(size, device='cuda')
+            y = torch.randn(size, device='cuda')
+            z = add_triton(x, y)
+            assert torch.allclose(x + y, z), f"❌ Autotune 算子输出不正确 (size={size})"
         print("✅ Autotune 正确性测试通过")
     except Exception as e:
         print(f"❌ 测试失败: {e}")
         raise e
 
 test_autotune_correctness()
+
 ```
 
 

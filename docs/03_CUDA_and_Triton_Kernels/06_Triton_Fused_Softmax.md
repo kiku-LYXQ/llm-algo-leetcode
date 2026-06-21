@@ -47,6 +47,10 @@ import triton.language as tl
 
 
 ```python
+import torch
+import triton
+import triton.language as tl
+
 @triton.jit
 def fused_softmax_kernel(
     output_ptr, input_ptr, input_row_stride, output_row_stride,
@@ -57,7 +61,6 @@ def fused_softmax_kernel(
     row_idx = tl.program_id(0)
     
     # 2. 定位到当前行的起始指针
-    # 注意乘上 row_stride (每一行的步长)，因为在物理内存中，二维张量是展平的一维数组
     row_start_ptr = input_ptr + row_idx * input_row_stride
     
     # 3. 构造这一行的连续索引和掩码 (防越界)
@@ -65,57 +68,56 @@ def fused_softmax_kernel(
     input_ptrs = row_start_ptr + col_offsets
     mask = col_offsets < n_cols
     
-    # 4. 加载一整行到 SRAM 中。越界的部分补一个极小的负数 (比如 -float('inf'))，防止影响求 max
+    # 4. 加载一整行到 SRAM 中
     row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
     
     # ==========================================
     # TODO 1: 寻找当前行的最大值 (安全 Softmax 第一步)
     # ==========================================
-    # row_max = ???
-    row_max = tl.zeros((1,), dtype=tl.float32)  # 占位初始化
+    row_max = tl.max(row, axis=0)
     
-    safe_row = row  # 占位初始化
+    # 减去最大值，避免 exp() 溢出
+    safe_row = row - row_max
     
     # ==========================================
     # TODO 2: 计算指数 (Numerator)
     # ==========================================
-    # numerator = ???
-    numerator = safe_row  # 占位初始化
+    numerator = tl.exp(safe_row)
     
     # ==========================================
-    # TODO 3: 求和 (Denominator)。注意只有 mask 内的值才能参与计算
+    # TODO 3: 求和 (Denominator)
     # ==========================================
-    # denominator = ???
-    denominator = tl.zeros((1,), dtype=tl.float32) + 1.0  # 占位初始化（避免除零）
+    denominator = tl.sum(numerator, axis=0)
     
     # ==========================================
-    # TODO 4: 计算最终输出，并存回显存
+    # TODO 4: 计算最终输出
     # ==========================================
-    # softmax_output = ???
-    softmax_output = numerator  # 占位初始化
+    softmax_output = numerator / denominator
     
     # 定位输出指针，写回
     output_row_start_ptr = output_ptr + row_idx * output_row_stride
     output_ptrs = output_row_start_ptr + col_offsets
     tl.store(output_ptrs, softmax_output, mask=mask)
 
-def triton_softmax(x: torch.Tensor):
+def triton_softmax(x: torch.Tensor) -> torch.Tensor:
     M, N = x.shape
-    # 分配输出内存
     y = torch.empty_like(x)
-    
-    # 寻找大于 N 的最小 2 的幂次方作为 BLOCK_SIZE，保证一行能一次性塞入
-    # 如果 N 太大，这里会抛出内存限制异常，此时需要分块循环
     BLOCK_SIZE = triton.next_power_of_2(N)
     
-    # 启动 M 个 program
-    grid = (M, )
+    num_warps = 4
+    if BLOCK_SIZE >= 2048:
+        num_warps = 8
+    if BLOCK_SIZE >= 4096:
+        num_warps = 16
+        
+    grid = (M,)
     
     fused_softmax_kernel[grid](
         y, x,
         x.stride(0), y.stride(0),
         N,
         BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=num_warps
     )
     return y
 ```
@@ -130,32 +132,34 @@ def test_fused_softmax():
         
     try:
         torch.manual_seed(42)
-        # 测试数据: 8192 行，每行 1000 个元素
-        M, N = 8192, 1000
-        x = torch.randn(M, N, device='cuda')
+        test_cases = [
+            (8192, 1000),
+            (7, 257),
+        ]
         
-        # PyTorch 原生 Softmax
-        y_ref = torch.softmax(x, axis=1)
-        
-        # Triton 实现
-        y_tri = triton_softmax(x)
-        
-        diff = torch.max(torch.abs(y_ref - y_tri))
-        print(f"最大误差: {diff.item():.6e}")
-        assert diff < 1e-5, "Triton Softmax 计算结果不准确！"
+        for M, N in test_cases:
+            x = torch.randn(M, N, device='cuda')
+            y_ref = torch.softmax(x, dim=1)
+            y_tri = triton_softmax(x)
+            diff = torch.max(torch.abs(y_ref - y_tri))
+            print(f"[{M}x{N}] 最大误差: {diff.item():.6e}")
+            assert diff < 1e-5, f"Triton Softmax 计算结果不准确！(M={M}, N={N})"
         
         print("✅ 跨线程归约的数值稳定 Softmax 算子实现成功！")
         
-    
-        print("\n--- 性能基准测试 (Benchmark) ---")
+        print()
+        print("--- 性能基准测试 (Benchmark) ---")
         quantiles = [0.5, 0.2, 0.8]
-        ms_pt, min_ms_pt, max_ms_pt = triton.testing.do_bench(lambda: torch.softmax(x, axis=1), quantiles=quantiles)
+        M, N = 8192, 1000
+        x = torch.randn(M, N, device='cuda')
+        ms_pt, min_ms_pt, max_ms_pt = triton.testing.do_bench(lambda: torch.softmax(x, dim=1), quantiles=quantiles)
         ms_tr, min_ms_tr, max_ms_tr = triton.testing.do_bench(lambda: triton_softmax(x), quantiles=quantiles)
         print(f"PyTorch Time: {ms_pt:.4f} ms")
         print(f"Triton Time:  {ms_tr:.4f} ms")
         print(f"Speedup:      {ms_pt / ms_tr:.2f}x")
     except Exception as e:
         print(f"❌ 测试失败: {e}")
+        raise
 
 test_fused_softmax()
 

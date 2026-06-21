@@ -17,7 +17,7 @@
 > **相关阅读**:  
 > 本节使用 Triton 实现了底层的显存与计算优化。
 > 如果你对该算子的数学公式推导和纯 PyTorch 高层结构还不熟悉，建议先复习 PyTorch 篇：
-> [`../02_PyTorch_Algorithms/15_FlashAttention_Sim.md`](../02_PyTorch_Algorithms/15_FlashAttention_Sim.md)
+> [`../02_PyTorch_Algorithms/13_FlashAttention_Sim.ipynb`](../02_PyTorch_Algorithms/13_FlashAttention_Sim.md)
 ### Step 1: Flash Attention 内核的执行逻辑
 
 > **任务分配 (Grid)：**
@@ -54,6 +54,10 @@ import triton.language as tl
 
 
 ```python
+import torch
+import triton
+import triton.language as tl
+
 @triton.jit
 def flash_attn_fwd_kernel(
     Q_ptr, K_ptr, V_ptr, sm_scale,
@@ -68,6 +72,7 @@ def flash_attn_fwd_kernel(
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     
+    # 我们假设 head_dim 恰好等于 BLOCK_DMODEL，且 seqlen_q 是 BLOCK_M 的倍数
     q_ptrs = Q_ptr + (offs_m[:, None] * BLOCK_DMODEL + offs_d[None, :])
     q = tl.load(q_ptrs)
     
@@ -82,6 +87,7 @@ def flash_attn_fwd_kernel(
     for start_n in range(0, num_n_blocks):
         offs_n = start_n * BLOCK_N + tl.arange(0, BLOCK_N)
         
+        # 加载 K 块和 V 块
         k_ptrs = K_ptr + (offs_n[:, None] * BLOCK_DMODEL + offs_d[None, :])
         v_ptrs = V_ptr + (offs_n[:, None] * BLOCK_DMODEL + offs_d[None, :])
         k = tl.load(k_ptrs)
@@ -90,30 +96,27 @@ def flash_attn_fwd_kernel(
         # ==========================================
         # TODO 1: 计算注意力分数 S = Q @ K^T * scale
         # ==========================================
-        # qk = ???
-        # qk *= sm_scale
-        qk = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)  # 占位初始化
+        qk = tl.dot(q, tl.trans(k))
+        qk *= sm_scale
         
         # ==========================================
         # TODO 2: 计算 Online Softmax 的新状态
         # ==========================================
-        # m_block = ???
-        # m_new = ???
-        m_new = m_i  # 占位初始化
+        m_block = tl.max(qk, axis=1)
+        m_new = tl.maximum(m_i, m_block)
         
         # ==========================================
         # TODO 3: 计算指数并更新 l_i 和 p
         # ==========================================
-        # p = ???
-        # alpha = ???
-        # l_new = ???
-        p = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)  # 占位初始化
-        l_new = l_i  # 占位初始化
+        p = tl.exp(qk - m_new[:, None])
+        alpha = tl.exp(m_i - m_new)
+        l_new = l_i * alpha + tl.sum(p, axis=1)
         
         # ==========================================
         # TODO 4: 修正过去的输出结果 acc，并累加新的 p @ v
         # ==========================================
-        # acc = ???
+        acc = acc * alpha[:, None]
+        acc += tl.dot(p.to(v.dtype), v)
         
         # 更新状态准备进入下一块的循环
         m_i = m_new
@@ -160,35 +163,30 @@ def test_triton_flash_attention():
         
     try:
         torch.manual_seed(42)
-        # 构造规则形状的数据
-        seqlen_q = 256
-        seqlen_k = 256
-        head_dim = 64
+        cases = [
+            (256, 256, 64),
+            (128, 128, 64),
+        ]
         
-        q = torch.randn(seqlen_q, head_dim, device='cuda', dtype=torch.float16)
-        k = torch.randn(seqlen_k, head_dim, device='cuda', dtype=torch.float16)
-        v = torch.randn(seqlen_k, head_dim, device='cuda', dtype=torch.float16)
-        sm_scale = 1.0 / math.sqrt(head_dim)
-        
-        # 1. PyTorch 原生计算基准
-        attn = (q @ k.transpose(-2, -1)) * sm_scale
-        attn = torch.nn.functional.softmax(attn, dim=-1)
-        out_ref = attn @ v
-        
-        # 2. Triton 算子计算
-        out_tri = triton_flash_attention(q, k, v, sm_scale)
-        
-        # 3. 验证误差
-        diff = torch.max(torch.abs(out_ref - out_tri))
-        print(f"最大误差: {diff.item():.6e}")
-        assert diff < 1e-3, "Triton Flash Attention 结果不正确！"
+        for seqlen_q, seqlen_k, head_dim in cases:
+            q = torch.randn(seqlen_q, head_dim, device='cuda', dtype=torch.float16)
+            k = torch.randn(seqlen_k, head_dim, device='cuda', dtype=torch.float16)
+            v = torch.randn(seqlen_k, head_dim, device='cuda', dtype=torch.float16)
+            sm_scale = 1.0 / math.sqrt(head_dim)
+            
+            attn = (q @ k.transpose(-2, -1)) * sm_scale
+            attn = torch.nn.functional.softmax(attn, dim=-1)
+            out_ref = attn @ v
+            out_tri = triton_flash_attention(q, k, v, sm_scale)
+            diff = torch.max(torch.abs(out_ref - out_tri))
+            print(f"[{seqlen_q}x{seqlen_k}x{head_dim}] 最大误差: {diff.item():.6e}")
+            assert diff < 1e-3, f"Triton Flash Attention 结果不正确！(seqlen_q={seqlen_q}, seqlen_k={seqlen_k}, head_dim={head_dim})"
         
         print("✅ Triton Flash Attention 前向计算内核实现成功！")
         print(" 实现了 SRAM 中块与块之间的局部最大值归约更新，掌握了 Online Softmax 的核心机制。")
         
-    
-        print("\n--- 性能基准测试 (Benchmark) ---")
-        # 典型的 LLM 推理/训练尺寸
+        print()
+        print("--- 性能基准测试 (Benchmark) ---")
         seqlen_q = 4096
         seqlen_k = 4096
         head_dim = 64
@@ -203,8 +201,6 @@ def test_triton_flash_attention():
             return attn @ v
             
         quantiles = [0.5, 0.2, 0.8]
-        # 注意: 如果 seqlen = 4096, Pytorch 需要分配 4096x4096x2 bytes = 32MB 的中间矩阵
-        # Flash Attention 只需要 O(N) 的显存，并且速度极快
         try:
             ms_pt, _, _ = triton.testing.do_bench(lambda: torch_attn(q_l, k_l, v_l), quantiles=quantiles)
             ms_tr, _, _ = triton.testing.do_bench(lambda: triton_flash_attention(q_l, k_l, v_l, sm_scale), quantiles=quantiles)
@@ -212,13 +208,13 @@ def test_triton_flash_attention():
             print(f"Triton Time (O(N) memory):    {ms_tr:.4f} ms")
             print(f"Speedup:                      {ms_pt / ms_tr:.2f}x")
         except torch.cuda.OutOfMemoryError:
-            print("PyTorch OOM! 序列太长导致显存溢出，但 Triton Flash Attention 依然可以运行。")
-    except NotImplementedError:
-        print("请先完成 TODO 代码！")
+            print("PyTorch OOM! 序列太长导致显存溢出，Flash Attention 仍可运行。")
     except Exception as e:
         print(f"❌ 测试失败: {e}")
+        raise
 
 test_triton_flash_attention()
+
 ```
 
 ---

@@ -49,6 +49,11 @@ import os
 
 
 ```python
+import torch
+import triton
+import triton.language as tl
+import os
+
 # ==========================================
 # Bug 1: 忘记二维步长 (Stride)
 # 这个算子试图提取一个二维矩阵 (M, N) 的某一行，并加上一个标量。
@@ -57,14 +62,8 @@ import os
 def bug_stride_kernel(x_ptr, y_ptr, stride_x_row, stride_y_row, N, BLOCK_SIZE: tl.constexpr):
     row_idx = tl.program_id(0)
     
-    # ❌ 错误代码: 没有乘以行步长，导致所有 Program 都在读第一行附近的数据！
-    row_start = x_ptr + row_idx
-    
-    # ==========================================
-    # TODO 1: 修复行起始指针的计算
-    # 提示: 在物理显存中，第 i 行的起始地址需要考虑行步长
-    # ==========================================
-    # row_start = ???
+    # ✅ TODO 1: 修复行起始指针的计算
+    row_start = x_ptr + row_idx * stride_x_row
     
     offsets = tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
@@ -72,15 +71,8 @@ def bug_stride_kernel(x_ptr, y_ptr, stride_x_row, stride_y_row, N, BLOCK_SIZE: t
     x = tl.load(row_start + offsets, mask=mask)
     y = x + 1.0
     
-    # ❌ 错误代码: 输出指针也忘记乘步长
-    out_start = y_ptr + row_idx
-    
-    # ==========================================
-    # TODO 2: 修复输出的写入指针
-    # 提示: 输出指针的计算方式与输入相同
-    # ==========================================
-    # out_start = ???
-    
+    # ✅ TODO 2: 修复输出的写入指针
+    out_start = y_ptr + row_idx * stride_y_row
     tl.store(out_start + offsets, y, mask=mask)
 
 # ==========================================
@@ -94,16 +86,9 @@ def bug_mask_kernel(x_ptr, y_ptr, out_ptr, N, BLOCK_SIZE: tl.constexpr):
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
     
-    # ❌ 错误代码: 越界部分读取的值是不确定的，点积会出错
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    
-    # ==========================================
-    # TODO 3: 修复 Load，确保越界部分用 0.0 填充
-    # 提示: tl.load 支持 other 参数来指定越界位置的填充值
-    # ==========================================
-    # x = ???
-    # y = ???
+    # ✅ TODO 3: 修复 Load，确保越界部分用 0.0 填充
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
     
     # 演示调试: 可以在这里取消注释以观察数据
     # if pid == 0:
@@ -247,9 +232,14 @@ def run_debug_simulations():
 # 标准测试函数
 def test_memory_debug():
     """标准测试函数包装器"""
+    if not torch.cuda.is_available():
+        print("⏭️ 无 GPU，跳过调试测试。")
+        return
     run_debug_simulations()
 
-test_memory_debug()
+if torch.cuda.is_available():
+    test_memory_debug()
+
 ```
 
 ### 解析

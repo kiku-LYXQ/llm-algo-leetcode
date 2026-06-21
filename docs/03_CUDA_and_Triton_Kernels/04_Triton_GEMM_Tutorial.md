@@ -158,42 +158,45 @@ def test_fused_gemm():
         
     try:
         torch.manual_seed(42)
-        # 测试大型矩阵以填满 GPU (A100 级别通常需要 4K x 4K 以上才能测出峰值)
+
+        # 先验证一个非整除的小尺寸，覆盖 mask / 边界访问
+        for M, N, K, tol in [
+            (127, 193, 61, 2e-2),
+            (4096, 4096, 4096, 1e-2),
+        ]:
+            a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+            b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+
+            triton_output = triton_gemm(a, b)
+            torch_output = torch.matmul(a, b)
+
+            diff = torch.max(torch.abs(triton_output - torch_output))
+            print(f"[{M}x{K}] x [{K}x{N}] 最大误差: {diff.item():.6e}")
+            assert diff < tol, f"Triton GEMM 结果不正确！(M={M}, N={N}, K={K})"
+
+        print("✅ Triton 分块 GEMM 逻辑正确！")
+
+        # 2. Benchmark 对比 (吞吐量 TFLOPs)
+        print()
+        print("--- 性能基准测试 (Benchmark: TFLOPs) ---")
         M, N, K = 4096, 4096, 4096
         a = torch.randn((M, K), device='cuda', dtype=torch.float16)
         b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-        
-        # 1. 验证结果正确性
-        triton_output = triton_gemm(a, b)
-        torch_output = torch.matmul(a, b)
-        
-        # 矩阵乘法的绝对误差容忍度需要调高一点 (受浮点精度累加影响)
-        diff = torch.max(torch.abs(triton_output - torch_output))
-        print(f"最大误差: {diff.item():.6e}")
-        assert diff < 1e-2, "Triton GEMM 结果不正确！"
-        print("✅ Triton 分块 GEMM 逻辑正确！")
-        
-        # 2. Benchmark 对比 (吞吐量 TFLOPs)
-        print("\n--- 性能基准测试 (Benchmark: TFLOPs) ---")
         quantiles = [0.5, 0.2, 0.8]
-        # 计算浮点运算次数 (2 * M * N * K)
         flops = 2 * M * N * K
-        
+
         ms_pt, _, _ = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
         ms_tr, _, _ = triton.testing.do_bench(lambda: triton_gemm(a, b), quantiles=quantiles)
-        
-        # 转换为 TFLOPs (TeraFLOPs per second)
-        tflops_pt = (flops / ms_pt) * 1e-9
-        tflops_tr = (flops / ms_tr) * 1e-9
-        
-        print(f"PyTorch cuBLAS Time: {ms_pt:.4f} ms | Throughput: {tflops_pt:.1f} TFLOPs")
-        print(f"Triton Autotune Time:{ms_tr:.4f} ms | Throughput: {tflops_tr:.1f} TFLOPs")
-        print("✅ 所有测试通过！通过 @triton.autotune 搜索最佳的 BLOCK 切块与 Pipeline 配置，可以逼近 cuBLAS 的性能。")
-        
-    except NotImplementedError:
-        print("请先完成 TODO 代码！")
+
+        # 转换为 TFLOPs
+        tflops = lambda ms: flops / ms * 1e-9
+        print(f"PyTorch Time: {ms_pt:.4f} ms | {tflops(ms_pt):.2f} TFLOPs")
+        print(f"Triton Time:  {ms_tr:.4f} ms | {tflops(ms_tr):.2f} TFLOPs")
+        print(f"Speedup:      {ms_pt / ms_tr:.2f}x")
+
     except Exception as e:
         print(f"❌ 测试失败: {e}")
+        raise e
 
 test_fused_gemm()
 

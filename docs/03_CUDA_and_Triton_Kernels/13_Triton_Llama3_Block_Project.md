@@ -51,10 +51,15 @@ import math
 
 
 ```python
+import torch
+import torch.nn as nn
+import triton
+import math
+
 # ==========================================
 # 我们假设这些函数是你在前几节 (03, 07, 08, 02) 中已经写好的 Triton 封装。
 # 为了让本 Notebook 能独立运行，我们在这里提供极其简化的 dummy 实现或者直接调用。
-# 用 import 导入你的 Triton Kernel。
+# 在实际工程中，你会用 import 导入你的 Triton Kernel。
 # ==========================================
 def triton_rmsnorm(x, weight, eps=1e-5):
     # 假设这里调用了 03_Triton_Fused_RMSNorm 的算子
@@ -102,13 +107,8 @@ class TritonLlama3Block(nn.Module):
         self.norm2_weight = nn.Parameter(torch.ones(dim))
         
     def forward(self, x, cos, sin):
-        #raise NotImplementedError("请完成 TODO 1-4")
-        
-        # ==========================================
         # TODO 1: 使用 Triton RMSNorm 替换原生 Norm
-        # ==========================================
-        # h = ???
-        h = x  # 占位初始化
+        h = triton_rmsnorm(x, self.norm1_weight)
         
         # QKV 投影并变维 (batch, seq, n_heads, head_dim)
         batch_size, seq_len, _ = h.shape
@@ -116,33 +116,64 @@ class TritonLlama3Block(nn.Module):
         k = self.attn_k(h).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         v = self.attn_v(h).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         
-        # ==========================================
         # TODO 2: 使用 Triton 融合 RoPE 处理 q 和 k
-        # ==========================================
-        # q, k = ???
-
+        q, k = triton_rope(q, k, cos, sin)
         
-        # ==========================================
         # TODO 3: 使用 Triton Flash Attention
-        # ==========================================
-        # attn_output = ???
-        attn_output = q  # 占位初始化
+        attn_output = triton_flash_attn(q, k, v)
         
         # 恢复形状并输出投影
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
         h = x + self.attn_o(attn_output)
         
-        # ==========================================
         # TODO 4: MLP 部分
-        # ==========================================
-        # normed_h = ???
-        # mlp_out = ???
-        # out = ???
-        normed_h = h  # 占位初始化                                                                                                                                            
-        mlp_out = torch.zeros_like(h)  # 占位初始化                                                                                                                           
-        out = h + mlp_out  # 占位初始化
-
+        normed_h = triton_rmsnorm(h, self.norm2_weight)
+        mlp_out = triton_swiglu(normed_h, self.mlp_gate.weight, self.mlp_up.weight, self.mlp_down.weight)
+        out = h + mlp_out
+        
         return out
+
+#  # 端到端性能测试
+# import time
+
+# def run_end_to_end_benchmark():
+#     if not torch.cuda.is_available():
+#         print("⏭️ 无 GPU，跳过测试")
+#         return
+    
+#     # 模拟 LLaMA-3 的一个标准层配置
+#     dim = 4096
+#     hidden_dim = 14336
+#     n_heads = 32
+#     batch, seq = 2, 2048
+    
+#     triton_block = TritonLlama3Block(dim, hidden_dim, n_heads).cuda().half()
+#     x = torch.randn(batch, seq, dim, device='cuda', dtype=torch.float16)
+    
+#     # 模拟 cos 和 sin
+#     head_dim = dim // n_heads
+#     cos = torch.randn(seq, head_dim // 2, device='cuda', dtype=torch.float16)
+#     sin = torch.randn(seq, head_dim // 2, device='cuda', dtype=torch.float16)
+    
+#     print(" 开始运行端到端 Benchmark (Warmup 10 次，记录 50 次)...")
+#     # Warmup
+#     for _ in range(10):
+#         _ = triton_block(x, cos, sin)
+#     torch.cuda.synchronize()
+    
+#     # 测试 Triton 整合版的耗时
+#     start = time.time()
+#     for _ in range(50):
+#         _ = triton_block(x, cos, sin)
+#     torch.cuda.synchronize()
+#     triton_time = (time.time() - start) / 50.0 * 1000 # ms
+    
+#     print(f"✅ 全 Triton 加速的 LLaMA-3 Block 单层前向延迟: {triton_time:.2f} ms")
+#     print(" 通过算子融合和 SRAM 内计算，Triton 实现显著降低了 Memory Bound 操作的开销。")
+
+
+
+# test_llama3_block()
 ```
 
 
@@ -153,52 +184,80 @@ def test_llama3_block():
         print("⏭️ 忽略测试：无 GPU。")
         return
     
+    def reference_forward(block, x, cos, sin, funcs):
+        h = funcs['triton_rmsnorm'](x, block.norm1_weight)
+        batch_size, seq_len, _ = h.shape
+        q = block.attn_q(h).view(batch_size, seq_len, block.n_heads, block.head_dim).transpose(1, 2)
+        k = block.attn_k(h).view(batch_size, seq_len, block.n_heads, block.head_dim).transpose(1, 2)
+        v = block.attn_v(h).view(batch_size, seq_len, block.n_heads, block.head_dim).transpose(1, 2)
+        q, k = funcs['triton_rope'](q, k, cos, sin)
+        attn_output = funcs['triton_flash_attn'](q, k, v)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        h = x + block.attn_o(attn_output)
+        normed_h = funcs['triton_rmsnorm'](h, block.norm2_weight)
+        mlp_out = funcs['triton_swiglu'](normed_h, block.mlp_gate.weight, block.mlp_up.weight, block.mlp_down.weight)
+        return h + mlp_out
+    
+    module_globals = TritonLlama3Block.forward.__globals__
+    orig_funcs = {
+        'triton_rmsnorm': module_globals['triton_rmsnorm'],
+        'triton_rope': module_globals['triton_rope'],
+        'triton_flash_attn': module_globals['triton_flash_attn'],
+        'triton_swiglu': module_globals['triton_swiglu'],
+    }
+    calls = {name: 0 for name in orig_funcs}
+    
+    def make_wrapper(name):
+        fn = orig_funcs[name]
+        def wrapped(*args, **kwargs):
+            calls[name] += 1
+            return fn(*args, **kwargs)
+        return wrapped
+    
     try:
-        # ==========================================
-        # 检测是否调用了Triton算子
-        # ==========================================
-        import inspect
-        source = inspect.getsource(TritonLlama3Block.forward)
+        for name in orig_funcs:
+            module_globals[name] = make_wrapper(name)
         
-        # 检查必需的函数调用
-        required_calls = [
-            ('triton_rmsnorm', 'TODO 1: 必须调用 triton_rmsnorm'),
-            ('triton_flash_attn', 'TODO 3: 必须调用 triton_flash_attn'),
-            ('triton_swiglu', 'TODO 4: 必须调用 triton_swiglu'),
-        ]
-        
-        for func_name, error_msg in required_calls:
-            if func_name not in source:
-                raise AssertionError(error_msg)
-        
-        # ==========================================
-        # 功能测试
-        # ==========================================
+        torch.manual_seed(42)
         dim = 512
         hidden_dim = 2048
         n_heads = 8
         batch, seq = 2, 128
         
         triton_block = TritonLlama3Block(dim, hidden_dim, n_heads).cuda().half()
+        triton_block.eval()
         x = torch.randn(batch, seq, dim, device='cuda', dtype=torch.float16)
         head_dim = dim // n_heads
         cos = torch.randn(seq, head_dim // 2, device='cuda', dtype=torch.float16)
         sin = torch.randn(seq, head_dim // 2, device='cuda', dtype=torch.float16)
         
         output = triton_block(x, cos, sin)
+        ref = reference_forward(triton_block, x, cos, sin, orig_funcs)
+        
+        # 调用行为验证
+        assert calls['triton_rmsnorm'] == 2, f"rmsnorm 调用次数错误: {calls['triton_rmsnorm']}"
+        assert calls['triton_rope'] == 1, f"rope 调用次数错误: {calls['triton_rope']}"
+        assert calls['triton_flash_attn'] == 1, f"flash_attn 调用次数错误: {calls['triton_flash_attn']}"
+        assert calls['triton_swiglu'] == 1, f"swiglu 调用次数错误: {calls['triton_swiglu']}"
         
         # 基本检查
         assert output.shape == x.shape, "输出形状错误"
         assert not torch.isnan(output).any(), "输出包含 NaN"
         assert not torch.isinf(output).any(), "输出包含 Inf"
         
-        print("✅ Triton LLaMA-3 Block 测试通过")
+        # 数值对照参考实现
+        assert torch.allclose(output, ref, atol=2e-3, rtol=2e-3), "输出与参考实现不一致"
         
+        print("✅ Triton LLaMA-3 Block 测试通过")
     except Exception as e:
         print(f"❌ 测试失败: {e}")
         raise
+    finally:
+        for name, fn in orig_funcs.items():
+            module_globals[name] = fn
 
 test_llama3_block()
+
 ```
 
 ---

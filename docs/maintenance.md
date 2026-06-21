@@ -71,6 +71,19 @@
 
 这些目录中的章节页面通常由 `convert_notebook.py` 从根目录源文件同步生成。维护时应优先修改根目录源文件，再重新生成 `docs/` 页面。
 
+`convert_notebook.py` 现在支持两种运行方式：
+
+- 全量模式：不带参数运行，重建 Chapter 2 / 3 的整章 `docs/` 镜像
+- 局部模式：通过 `--dir` 或 `--file` 只同步指定目录或文件，适合只修某几个 notebook 时使用
+
+局部模式示例：
+
+```bash
+python convert_notebook.py --dir 03_CUDA_and_Triton_Kernels
+python convert_notebook.py --file 03_CUDA_and_Triton_Kernels/05_Triton_Autotune_and_Profiling.ipynb
+python convert_notebook.py --dry-run --dir 03_CUDA_and_Triton_Kernels
+```
+
 ### 手工维护文件
 
 以下文件不属于自动生成物，应该直接手工维护：
@@ -128,6 +141,9 @@
 - `check_source_docs_mirror.py`：章节正文与 docs 镜像一致性检查
 - `convert_chapter0_1.py`：第零部分 / 第一部分 source -> docs 转换
 - `convert_notebook.py`：第二部分 / 第三部分 source -> docs 转换
+  - 默认全量重建 Chapter 2 / 3 的 `docs/` 镜像
+  - 支持 `--dir` / `--file` 局部同步
+  - 支持 `--dry-run` 预览影响范围
 - `SESSION_HANDOFF.md`：当前交接记录
 
 ## 文档职责图

@@ -53,7 +53,14 @@
 
 ## 🚀 快速开始
 
-如果你想开始学习，直接从在线站点或左侧章节目录进入即可。环境选择和平台差异统一看 [使用指南](./docs/guide.md)。
+如果你想开始学习，直接从在线站点或左侧章节目录进入即可。环境与平台差异见 [使用指南](./docs/guide.md)。
+
+### 学习路径
+
+1. 在左侧侧边栏选择感兴趣的章节
+2. 点击 **📖 完整导学** 了解学习路径
+3. 选择具体题目开始学习
+4. 环境和平台差异见 [使用指南](./docs/guide.md)
 
 ### 方式 1：在线阅读
 
@@ -75,8 +82,6 @@ conda env create -f environment.yml
 conda activate llm_algo
 jupyter lab
 ```
-
-更完整的环境分层、GPU/CUDA、CNB 和 Docker 说明请见 [使用指南](./docs/guide.md)。
 
 ## 📖 更多资源
 
@@ -154,10 +159,4 @@ conda activate llm_algo
 jupyter lab
 ```
 
-For Part 3 or additional GPU/Triton dependencies, install:
-
-```bash
-pip install -r requirements/gpu.txt
-```
-
-For detailed directory structures and learning paths, please refer to the Chinese section or individual chapter folders.
+For environment details and platform differences, see the Chinese guide section or [docs/guide.md](./docs/guide.md).

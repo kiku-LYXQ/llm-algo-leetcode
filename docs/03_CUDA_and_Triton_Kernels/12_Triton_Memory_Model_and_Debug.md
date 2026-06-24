@@ -10,7 +10,7 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在编写 Triton 算子时，最常见的挑战不是构思数学公式，而是遇到 `Segmentation Fault` (显存越界)、脏数据 (Mask 没写对)、或者输出全为 `0` 且完全不知道如何打断点。
+在编写 Triton 算子时，最常见的挑战不是构思数学公式，而是遇到 `Segmentation Fault` (显存越界)、脏数据 (Mask 没写对)、或者输出全为 `0` 且一时不容易定位问题。
 与 PyTorch 这种高度抽象的框架不同，Triton 需要你直面 GPU 的物理内存布局（HBM vs SRAM）以及指针偏移计算 (`Stride`)。
 本节我们将深入剖析 Triton 的内存模型，并提供几个"故意写错"的典型算子，让你实战演练 `TRITON_INTERPRET=1` 和 `tl.device_print` 这些关键的 Debug 工具。
 
@@ -27,22 +27,22 @@
 
 > **HBM (全局显存) vs SRAM (片上共享内存)：**
 > - Triton 的 `tl.load` 就是把数据从慢速、容量大的 HBM 搬到极速、极小（每个 SM 几百 KB）的 SRAM 中。
-> - HBM 是一维线性空间！不管你的 PyTorch 张量是几维，在物理内存中它都是一条长长的线。因此我们必须用 `stride` (步长) 来定位。
+> - HBM 是一维线性空间！不管你的 PyTorch 张量是几维，在物理内存中它都可以视作一条长长的线，因此通常需要用 `stride` (步长) 来定位。
 
 > **三大高频踩坑点：**
 > 1. **忘记乘 Stride：** 二维矩阵的第 `i` 行起始指针是 `ptr + i * stride_row`，千万不能只写 `ptr + i`。
 > 2. **Mask (掩码) 越界：** 当数据大小 `N` 不能被 `BLOCK_SIZE` 整除时，`tl.load(ptr, mask=...)` 中的 `mask` 没写对，会读到别人的显存（脏数据或直接崩掉）。
-> 3. **Block Size 不是 2 的幂：** Triton 强烈建议块大小设为 2 的幂（如 128, 256, 1024）。
+> 3. **Block Size 不是 2 的幂：** Triton 通常建议块大小设为 2 的幂（如 128, 256, 1024）。
 
 > **两大 Debug 工具：**
-> - `TRITON_INTERPRET=1 python xxx.py`：强制在 CPU 上逐行解释运行 Triton 代码，不会导致 GPU 挂起，且能报出 Python 级的越界错误。
-> - `tl.device_print("Debug Info", tensor)`：能在算子内部打印张量的值（必须配合少量数据，否则打印刷屏）。
+> - `TRITON_INTERPRET=1 python xxx.py`：强制在 CPU 上逐行解释运行 Triton 代码，通常能避免直接在 GPU 侧卡住，并报出 Python 级的越界错误。
+> - `tl.device_print("Debug Info", tensor)`：能在算子内部打印张量的值（建议配合少量数据，否则容易刷屏）。
 
 ### Step 2: 内存对齐与越界异常
-在 GPU 开发中，最令开发者痛苦的就是内存越界访问。Triton 封装了复杂的线程交互，但如果指针计算出现差错，程序会直接闪退。此外，由于内存事务（Memory Transactions）是按行对齐抓取的，确保张量维度是连续存放的也是性能优化的重中之重。
+在 GPU 开发中，内存越界访问是最常见的痛点之一。Triton 封装了复杂的线程交互，但如果指针计算出现差错，程序可能直接报错或退出。此外，由于内存事务（Memory Transactions）是按行对齐抓取的，确保张量维度是连续存放的也是性能优化的重要前提。
 
 ### Step 3: 调试工具与机制框架
-本节学习两个终极调试手段：1. 使用 `tl.device_print('变量名', value)` 强行打印某个线程里的张量内容（影响性能，仅供调试）；2. 配置环境变量 `TRITON_INTERPRET=1` 让脚本退回到 CPU 纯 Python 模式运行，从而可以用 pdb 断点追踪内核逻辑。
+本节学习两个常用调试手段：1. 使用 `tl.device_print('变量名', value)` 打印某个线程里的张量内容（影响性能，仅供调试）；2. 配置环境变量 `TRITON_INTERPRET=1` 让脚本退回到 CPU 纯 Python 模式运行，从而可以用 pdb 断点追踪内核逻辑。
 
 ###  Step 4: 动手实战
 
@@ -141,6 +141,8 @@ def run_debug_simulations():
     # 第二个 block (剩下36个) 的 sum 应该是 36
     assert out_1d[0].item() == 64.0 and out_1d[1].item() == 36.0, f"Bug 2 (Mask) 未修复: 读到了脏数据，求和不正确！得到了 {out_1d}"
     print("✅ Bug 2 修复成功：正确使用了 tl.load 的 other=0.0 处理边界。")
+
+raise NotImplementedError("请先完成 TODO 1-3")
 ```
 
 
@@ -154,7 +156,7 @@ try:
     
     if torch.cuda.is_available():
         run_debug_simulations()
-        print("\n✅ 掌握了 Stride、Mask 和 TRITON_INTERPRET 调试技巧，可以高效定位和修复 Triton 算子中的内存错误。")
+        print("\n✅ 理解了 Stride、Mask 和 TRITON_INTERPRET 调试技巧，有助于定位和修复 Triton 算子中的内存错误。")
     else:
         print("⏭️ 无 GPU，跳过测试。")
 except Exception as e:
@@ -253,10 +255,18 @@ def run_debug_simulations():
 # 标准测试函数
 def test_memory_debug():
     """标准测试函数包装器"""
+    required = ["bug_stride_kernel", "bug_mask_kernel", "run_debug_simulations"]
+    for name in required:
+        assert name in globals(), f"缺少必要定义: {name}"
+
     if not torch.cuda.is_available():
-        print("⏭️ 无 GPU，跳过调试测试。")
-        return
+        print("⏭️ 无 GPU，完成结构检查；运行级验证需要 GPU。")
+        print("✅ Triton Memory Debug 结构检查通过")
+        return True
+
     run_debug_simulations()
+    print("✅ Triton Memory Debug 运行级验证通过")
+    return True
 
 if torch.cuda.is_available():
     test_memory_debug()
@@ -270,7 +280,7 @@ if torch.cuda.is_available():
   ```python
   row_start = x_ptr + row_idx * stride_x_row
   ```
-- **关键点**：理解物理显存的一维平铺特性，必须使用 stride 来定位二维矩阵的行
+- **关键点**：理解物理显存的一维平铺特性，通常需要使用 stride 来定位二维矩阵的行
 - **技术细节**：
   - GPU 显存（HBM）是一维线性空间，所有多维张量都是平铺存储的
   - `stride_x_row` 表示从一行的起始位置到下一行起始位置的元素个数
@@ -284,7 +294,7 @@ if torch.cuda.is_available():
   ```python
   out_start = y_ptr + row_idx * stride_y_row
   ```
-- **关键点**：输出指针的计算方式与输入相同，必须考虑 stride
+- **关键点**：输出指针的计算方式与输入相同，需要考虑 stride
 - **技术细节**：
   - 写入操作与读取操作遵循相同的内存布局规则
   - 如果输入和输出的形状相同，通常 `stride_x_row == stride_y_row`
@@ -325,7 +335,7 @@ if torch.cuda.is_available():
   - 在 kernel 内部打印张量值，用于观察中间结果
   - 语法：`tl.device_print("Debug Info:", tensor)`
   - 注意事项：
-    - 只在少量数据时使用，否则输出会刷屏
+    - 建议只在少量数据时使用，否则输出容易刷屏
     - 可以使用条件判断：`if pid == 0: tl.device_print(...)`
     - 打印会影响性能，仅用于调试
   - 适用场景：检查中间计算结果、验证 mask 是否正确、观察数据分布

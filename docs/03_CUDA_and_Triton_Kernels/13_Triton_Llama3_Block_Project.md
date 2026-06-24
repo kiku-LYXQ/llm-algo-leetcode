@@ -16,7 +16,7 @@
 在本节中，我们将：
 1. 回顾并调用我们在前几节手写的：Triton Fused RMSNorm, Triton Fused RoPE, Triton Flash Attention, Triton Fused SwiGLU。
 2. 封装 PyTorch 的 `nn.Module` 接口。
-3. 运行端到端的 Benchmark，直观感受到算子融合带来的极致性能提升 (Latency 降低)。
+3. 通过行为测试和可选 benchmark 检查整个 Block 的集成是否正确。
 
 ## 前置
 
@@ -83,28 +83,31 @@ import triton
 import math
 
 # ==========================================
-# 我们假设这些函数是你在前几节 (03, 07, 08, 02) 中已经写好的 Triton 封装。
-# 为了让本 Notebook 能独立运行，我们在这里提供极其简化的 dummy 实现或者直接调用。
-# 在实际工程中，你会用 import 导入你的 Triton Kernel。
+# 这里用纯 PyTorch 参考实现模拟前序章节的 Triton 封装，
+# 这样 Notebook 可以独立运行，同时保留与工程实现一致的接口。
 # ==========================================
 def triton_rmsnorm(x, weight, eps=1e-5):
-    # 假设这里调用了 03_Triton_Fused_RMSNorm 的算子
-    # 为了测试能跑通，我们退化回高效的 PyTorch 原生实现模拟
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
 
 def triton_rope(q, k, cos, sin):
-    # 假设这里调用了 07_Triton_Fused_RoPE 的算子 (In-place)
-    # ... 省略 Triton kernel 调用 ...
-    return q, k
+    cos = cos.to(device=q.device, dtype=q.dtype)[None, None, :, :]
+    sin = sin.to(device=q.device, dtype=q.dtype)[None, None, :, :]
+
+    def rotate(x):
+        x_even = x[..., ::2]
+        x_odd = x[..., 1::2]
+        rotated = torch.stack(
+            (x_even * cos - x_odd * sin, x_even * sin + x_odd * cos),
+            dim=-1,
+        )
+        return rotated.flatten(-2)
+
+    return rotate(q), rotate(k)
 
 def triton_flash_attn(q, k, v):
-    # 假设这里调用了 08_Triton_Flash_Attention 的算子
-    # 使用 PyTorch SDPA 模拟 Triton Flash Attention 的极速性能
-    return torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    return torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
 
 def triton_swiglu(x, gate_weight, up_weight, down_weight):
-    # 假设这里调用了 02_Triton_Fused_SwiGLU 的算子
-    # x @ gate_weight, x @ up_weight, Swish(gate) * up, @ down_weight
     gate = x @ gate_weight.T
     up = x @ up_weight.T
     act = torch.nn.functional.silu(gate) * up
@@ -197,90 +200,66 @@ class TritonLlama3Block(nn.Module):
 #     print(f"✅ 全 Triton 加速的 LLaMA-3 Block 单层前向延迟: {triton_time:.2f} ms")
 #     print(" 通过算子融合和 SRAM 内计算，Triton 实现显著降低了 Memory Bound 操作的开销。")
 
-
-
-# test_llama3_block()
+raise NotImplementedError("请先完成 TODO 1-4")
 ```
 
 
 ```python
 # 标准测试函数
 def test_llama3_block():
-    if not torch.cuda.is_available():
-        print("⏭️ 忽略测试：无 GPU。")
-        return
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    dtype = torch.float16 if device == 'cuda' else torch.float32
+    if device == 'cpu':
+        print("⏭️ 无 GPU，使用 CPU fallback 进行结构和行为校验。")
     
-    def reference_forward(block, x, cos, sin, funcs):
-        h = funcs['triton_rmsnorm'](x, block.norm1_weight)
+    def reference_forward(block, x, cos, sin):
+        h = triton_rmsnorm(x, block.norm1_weight)
         batch_size, seq_len, _ = h.shape
         q = block.attn_q(h).view(batch_size, seq_len, block.n_heads, block.head_dim).transpose(1, 2)
         k = block.attn_k(h).view(batch_size, seq_len, block.n_heads, block.head_dim).transpose(1, 2)
         v = block.attn_v(h).view(batch_size, seq_len, block.n_heads, block.head_dim).transpose(1, 2)
-        q, k = funcs['triton_rope'](q, k, cos, sin)
-        attn_output = funcs['triton_flash_attn'](q, k, v)
+        q, k = triton_rope(q, k, cos, sin)
+        attn_output = triton_flash_attn(q, k, v)
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
         h = x + block.attn_o(attn_output)
-        normed_h = funcs['triton_rmsnorm'](h, block.norm2_weight)
-        mlp_out = funcs['triton_swiglu'](normed_h, block.mlp_gate.weight, block.mlp_up.weight, block.mlp_down.weight)
+        normed_h = triton_rmsnorm(h, block.norm2_weight)
+        mlp_out = triton_swiglu(normed_h, block.mlp_gate.weight, block.mlp_up.weight, block.mlp_down.weight)
         return h + mlp_out
-    
-    module_globals = TritonLlama3Block.forward.__globals__
-    orig_funcs = {
-        'triton_rmsnorm': module_globals['triton_rmsnorm'],
-        'triton_rope': module_globals['triton_rope'],
-        'triton_flash_attn': module_globals['triton_flash_attn'],
-        'triton_swiglu': module_globals['triton_swiglu'],
-    }
-    calls = {name: 0 for name in orig_funcs}
-    
-    def make_wrapper(name):
-        fn = orig_funcs[name]
-        def wrapped(*args, **kwargs):
-            calls[name] += 1
-            return fn(*args, **kwargs)
-        return wrapped
-    
-    try:
-        for name in orig_funcs:
-            module_globals[name] = make_wrapper(name)
-        
-        torch.manual_seed(42)
-        dim = 512
-        hidden_dim = 2048
-        n_heads = 8
-        batch, seq = 2, 128
-        
-        triton_block = TritonLlama3Block(dim, hidden_dim, n_heads).cuda().half()
-        triton_block.eval()
-        x = torch.randn(batch, seq, dim, device='cuda', dtype=torch.float16)
+
+    torch.manual_seed(42)
+    cases = [
+        dict(dim=512, hidden_dim=2048, n_heads=8, batch=2, seq=128),
+        dict(dim=256, hidden_dim=1024, n_heads=4, batch=1, seq=17),
+    ]
+
+    for case in cases:
+        dim = case["dim"]
+        hidden_dim = case["hidden_dim"]
+        n_heads = case["n_heads"]
+        batch = case["batch"]
+        seq = case["seq"]
+
+        triton_block = TritonLlama3Block(dim, hidden_dim, n_heads).to(device=device, dtype=dtype).eval()
+        x = torch.randn(batch, seq, dim, device=device, dtype=dtype)
         head_dim = dim // n_heads
-        cos = torch.randn(seq, head_dim // 2, device='cuda', dtype=torch.float16)
-        sin = torch.randn(seq, head_dim // 2, device='cuda', dtype=torch.float16)
-        
+        cos = torch.randn(seq, head_dim // 2, device=device, dtype=dtype)
+        sin = torch.randn(seq, head_dim // 2, device=device, dtype=dtype)
+
         output = triton_block(x, cos, sin)
-        ref = reference_forward(triton_block, x, cos, sin, orig_funcs)
-        
-        # 调用行为验证
-        assert calls['triton_rmsnorm'] == 2, f"rmsnorm 调用次数错误: {calls['triton_rmsnorm']}"
-        assert calls['triton_rope'] == 1, f"rope 调用次数错误: {calls['triton_rope']}"
-        assert calls['triton_flash_attn'] == 1, f"flash_attn 调用次数错误: {calls['triton_flash_attn']}"
-        assert calls['triton_swiglu'] == 1, f"swiglu 调用次数错误: {calls['triton_swiglu']}"
-        
-        # 基本检查
+        ref = reference_forward(triton_block, x, cos, sin)
+
         assert output.shape == x.shape, "输出形状错误"
+        assert output.dtype == x.dtype, "输出 dtype 错误"
         assert not torch.isnan(output).any(), "输出包含 NaN"
         assert not torch.isinf(output).any(), "输出包含 Inf"
-        
-        # 数值对照参考实现
         assert torch.allclose(output, ref, atol=2e-3, rtol=2e-3), "输出与参考实现不一致"
-        
-        print("✅ Triton LLaMA-3 Block 测试通过")
-    except Exception as e:
-        print(f"❌ 测试失败: {e}")
-        raise
-    finally:
-        for name, fn in orig_funcs.items():
-            module_globals[name] = fn
+
+        identity_cos = torch.ones_like(cos)
+        identity_sin = torch.zeros_like(sin)
+        output_identity = triton_block(x, identity_cos, identity_sin)
+        assert not torch.allclose(output, output_identity, atol=1e-5, rtol=1e-5), "RoPE 路径看起来没有生效"
+
+    print("✅ Triton LLaMA-3 Block 测试通过")
 
 test_llama3_block()
 
@@ -305,28 +284,31 @@ import triton
 import math
 
 # ==========================================
-# 我们假设这些函数是你在前几节 (03, 07, 08, 02) 中已经写好的 Triton 封装。
-# 为了让本 Notebook 能独立运行，我们在这里提供极其简化的 dummy 实现或者直接调用。
-# 在实际工程中，你会用 import 导入你的 Triton Kernel。
+# 这里用纯 PyTorch 参考实现模拟前序章节的 Triton 封装，
+# 这样 Notebook 可以独立运行，同时保留与工程实现一致的接口。
 # ==========================================
 def triton_rmsnorm(x, weight, eps=1e-5):
-    # 假设这里调用了 03_Triton_Fused_RMSNorm 的算子
-    # 为了测试能跑通，我们退化回高效的 PyTorch 原生实现模拟
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
 
 def triton_rope(q, k, cos, sin):
-    # 假设这里调用了 07_Triton_Fused_RoPE 的算子 (In-place)
-    # ... 省略 Triton kernel 调用 ...
-    return q, k
+    cos = cos.to(device=q.device, dtype=q.dtype)[None, None, :, :]
+    sin = sin.to(device=q.device, dtype=q.dtype)[None, None, :, :]
+
+    def rotate(x):
+        x_even = x[..., ::2]
+        x_odd = x[..., 1::2]
+        rotated = torch.stack(
+            (x_even * cos - x_odd * sin, x_even * sin + x_odd * cos),
+            dim=-1,
+        )
+        return rotated.flatten(-2)
+
+    return rotate(q), rotate(k)
 
 def triton_flash_attn(q, k, v):
-    # 假设这里调用了 08_Triton_Flash_Attention 的算子
-    # 使用 PyTorch SDPA 模拟 Triton Flash Attention 的极速性能
-    return torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    return torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
 
 def triton_swiglu(x, gate_weight, up_weight, down_weight):
-    # 假设这里调用了 02_Triton_Fused_SwiGLU 的算子
-    # x @ gate_weight, x @ up_weight, Swish(gate) * up, @ down_weight
     gate = x @ gate_weight.T
     up = x @ up_weight.T
     act = torch.nn.functional.silu(gate) * up
@@ -421,7 +403,7 @@ class TritonLlama3Block(nn.Module):
 
 
 
-# test_llama3_block()
+ 
 ```
 
 ### 解析

@@ -10,8 +10,8 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在 `02_PyTorch_Algorithms/13_FlashAttention_Sim` 和 `03_CUDA_and_Triton_Kernels/06_Triton_Fused_Softmax` 中，我们已经完全掌握了 Flash Attention 的两大数学核心：**分块计算 (Tiling)** 和 **在线安全 Softmax 归约 (Online Safe Softmax)**。
-本节我们将把这两者结合起来，利用 Triton 在 SRAM 中的极速读写，编写一个真正的、可运行在 GPU 上的 Flash Attention 前向计算内核。这是大模型推理与训练提速的基石算子。
+在 `02_PyTorch_Algorithms/13_FlashAttention_Sim` 和 `03_CUDA_and_Triton_Kernels/06_Triton_Fused_Softmax` 中，我们已经覆盖了 Flash Attention 的两大数学核心：**分块计算 (Tiling)** 和 **在线安全 Softmax 归约 (Online Safe Softmax)**。
+本节我们将把这两者结合起来，利用 Triton 在 SRAM 中的极速读写，编写一个可运行在 GPU 上的 Flash Attention 前向计算内核。这是大模型推理与训练提速的重要算子之一。
 
 ## 前置
 
@@ -169,6 +169,8 @@ def triton_flash_attention(q, k, v, sm_scale):
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=BLOCK_DMODEL,
     )
     return out
+
+raise NotImplementedError("请先完成 TODO 1-4")
 ```
 
 
@@ -178,14 +180,18 @@ import math
 
 def test_triton_flash_attention():
     if not torch.cuda.is_available():
-        print("⏭️ 忽略测试：无 GPU。")
-        return
+        print("⏭️ 无 GPU，完成结构检查；运行级验证需要 GPU。")
+        assert "flash_attn_fwd_kernel" in globals(), "缺少 flash_attn_fwd_kernel"
+        assert "triton_flash_attention" in globals(), "缺少 triton_flash_attention"
+        print("✅ Triton Flash Attention 结构检查通过")
+        return True
         
     try:
         torch.manual_seed(42)
         cases = [
             (256, 256, 64),
-            (128, 128, 64),
+            (128, 256, 64),
+            (64, 64, 32),
         ]
         
         for seqlen_q, seqlen_k, head_dim in cases:
@@ -203,7 +209,7 @@ def test_triton_flash_attention():
             assert diff < 1e-3, f"Triton Flash Attention 结果不正确！(seqlen_q={seqlen_q}, seqlen_k={seqlen_k}, head_dim={head_dim})"
         
         print("✅ Triton Flash Attention 前向计算内核实现成功！")
-        print(" 实现了 SRAM 中块与块之间的局部最大值归约更新，掌握了 Online Softmax 的核心机制。")
+        print(" 实现了 SRAM 中块与块之间的局部最大值归约更新，进一步理解了 Online Softmax 的核心机制。")
         
         print()
         print("--- 性能基准测试 (Benchmark) ---")

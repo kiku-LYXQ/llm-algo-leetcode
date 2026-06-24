@@ -27,7 +27,7 @@
 > **数值稳定性 (Safe Softmax)：**
 > 如果直接计算 $e^x$，当 $x$ 较大时（如 50），$e^{50}$ 会导致浮点数溢出 (NaN)。
 > 解决方案：让一行的每一个元素都减去该行的最大值 $m$。
-> $Soft\max(x_i) = \frac{e^{x_i - m}}{\sum e^{x_j - m}}$，这在数学上完全等价，但在计算机浮点表示中更加安全。
+> $Soft\max(x_i) = \frac{e^{x_i - m}}{\sum e^{x_j - m}}$，这在数学上等价，但在计算机浮点表示中更加安全。
 
 > **Triton 的行级并行：**
 > 处理形状为 `(M, N)` 的矩阵时，通常分配**一个 Program (线程块) 专门处理矩阵的一行**。
@@ -140,6 +140,8 @@ def triton_softmax(x: torch.Tensor) -> torch.Tensor:
         num_warps=num_warps
     )
     return y
+
+raise NotImplementedError("请先完成 TODO 1-4")
 ```
 
 
@@ -147,8 +149,11 @@ def triton_softmax(x: torch.Tensor) -> torch.Tensor:
 # 测试你的实现
 def test_fused_softmax():
     if not torch.cuda.is_available():
-        print("⏭️ 忽略测试：无 GPU。")
-        return
+        print("⏭️ 无 GPU，完成结构检查；运行级验证需要 GPU。")
+        assert "fused_softmax_kernel" in globals(), "缺少 fused_softmax_kernel"
+        assert "triton_softmax" in globals(), "缺少 triton_softmax"
+        print("✅ Triton Fused Softmax 结构检查通过")
+        return True
         
     try:
         torch.manual_seed(42)
@@ -299,6 +304,6 @@ def triton_softmax(x: torch.Tensor) -> torch.Tensor:
 **工程优化要点**
 - **内存访问优化**：整行数据只从 HBM 读取一次，所有计算（max、exp、sum、div）都在 SRAM 内完成，最后只写回一次，相比朴素实现减少了 2 次 HBM 往返。
 - **数值稳定性**：Safe Softmax 通过减去最大值避免指数溢出，这是工业级实现的标准做法。
-- **并行策略**：每个 Triton Program 处理一行，行间完全并行，无需同步。
+- **并行策略**：每个 Triton Program 处理一行，行间通常可并行，通常无需额外同步。
 - **动态 num_warps 调整**：根据 BLOCK_SIZE 动态调整 warp 数量，在答案实现中针对大块尺寸（≥2048）增加并行度以提升性能。
 - **Mask 处理技巧**：使用 `-inf` 作为越界填充值，利用其数学性质（`max` 时被忽略，`exp` 后为 0）优雅地处理边界情况，避免额外的条件分支。

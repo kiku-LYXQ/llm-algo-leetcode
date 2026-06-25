@@ -11,8 +11,8 @@
 
 
 在 `02_PyTorch_Algorithms` 章节中，我们学习过 LLaMA 的 RoPE 是通过将连续特征配对，进行复数旋转注入位置信息的。
-标准的 PyTorch 实现涉及张量切片 (`x[..., 0::2]`)、拼接 (`cat`) 以及逐元素乘法 (`* cos`, `* sin`)，在推理时高度消耗显存带宽。
-主流推理引擎（如 vLLM 和 TensorRT-LLM）底层普遍使用 **Triton / CUDA 融合算子** 来直接就地 (In-place) 计算 RoPE。本节我们将实现这一工业界高频应用的算子。
+标准的 PyTorch 实现涉及张量切片 (`x[..., 0::2]`)、拼接 (`cat`) 以及逐元素乘法 (`* cos`, `* sin`)，在推理时会带来额外的显存带宽开销。
+主流推理引擎（如 vLLM 和 TensorRT-LLM）通常会使用 **Triton / CUDA 融合算子** 来直接就地 (In-place) 计算 RoPE。本节我们将实现这一常见工业应用的算子。
 
 ## 前置
 
@@ -26,28 +26,26 @@
 **导语：** 如果想对照 RoPE 在 PyTorch 层的旋转实现，可以继续看这页；不影响继续读本节，但会更容易对应公式。
 - [Part 2: 03 RoPE Tutorial](../02_PyTorch_Algorithms/03_RoPE_Tutorial.md)
 
-### Step 1: RoPE 的物理内存布局与并行策略
+### Step 1: RoPE 的数学原理与内存布局
 
-> **特征交错与配对：**
-> 假设 Head 维度大小为 $d$。对于一个 Token 的 Head 向量 $[x_0, x_1, x_2, x_3]$。
-> 我们需要把 $(x_0, x_1)$ 配对旋转，$(x_2, x_3)$ 配对旋转。
-> 旋转公式：
-> $x'_{2i} = x_{2i} \cos(	heta) - x_{2i+1} \sin(	heta)$
-> $x'_{2i+1} = x_{2i+1} \cos(	heta) + x_{2i} \sin(	heta)$
+> **RoPE 的复数旋转本质：**
+> 将相邻的两个特征对 $(x_{2i}, x_{2i+1})$ 视为复数 $z = x_{2i} + i x_{2i+1}$。
+> 乘上旋转因子 $e^{i\theta} = \cos\theta + i\sin\theta$，展开后就得到 RoPE 的旋转公式。
+> 因此，偶数位和奇数位必须成对处理，不能彼此独立看待。
 
-> **Triton 算子设计思路：**
-> 1. 我们分配**一个 Program 处理一个 Token 的一个 Head**（长度为 $d$）。
-> 2. 由于 $d$ 通常较小（例如 LLaMA 中为 128），可将 128 个元素一次性 Load 进 SRAM。
+> **Triton 的并行策略：**
+> 1. 我们分配 **一个 Program 处理一个 Token 的一个 Head**（长度为 $d$）。
+> 2. 由于 $d$ 通常较小（例如 LLaMA 中常见为 128），可将整段 head 向量一次性 Load 进 SRAM。
 > 3. 从内存提取偶数索引和奇数索引的元素。
 > 4. 加载对应的 $\cos$ 和 $\sin$ 频率值。
 > 5. 在 SRAM 中执行旋转乘加运算。
 > 6. 将结果按照交错顺序 Store 回显存（就地修改）。
 
-### Step 2: RoPE 物理内存布局与并行策略
-传统 PyTorch 在执行 RoPE 时会产生切片（Slicing），带来严重的 Memory Bound 碎片开销。通过 Triton 融合，我们可以编写一个 In-place 算子：将奇数列和偶数列的旋转直接在 SRAM 计算后原路写回所在的显存地址，彻底消除内存抖动。
+### Step 2: In-place Triton 设计思路
+传统 PyTorch 在执行 RoPE 时会产生切片（Slicing）和拼接（Concat），带来额外的显存带宽开销。通过 Triton 融合，我们可以把偶数位和奇数位的旋转直接在 SRAM 中完成，然后原路写回原地址，避免中间张量落回 HBM。
 
-### Step 3: In-place 内核代码框架
-内核需要获取当前特征向量的前半部分指针和后半部分指针。利用预先计算好的 `cos` 和 `sin` 块缓存，执行 $X_{new} = X \cdot \cos - X_{shift} \cdot \sin$ 逻辑，并将结果强行覆盖写入原有的 $X$ 指针地址。
+### Step 3: 动手实战前的接口边界
+当前主线只覆盖 `(seq_len, n_heads, head_dim)` 的连续输入。内核会为每个 Token/Head 申请一个 Program，并使用 `cos` / `sin` 的预计算块做逐元素旋转。如果上层输入带有 `batch` 维度，通常先展平为 `(batch * seq_len, n_heads, head_dim)` 再调用这个 kernel。
 
 ###  Step 4: 动手实战
 
@@ -119,7 +117,7 @@ def fused_rope_kernel(
     # ==========================================
     # tl.store(...)
     # tl.store(...)
-    
+
 
 def triton_apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     """
@@ -128,7 +126,7 @@ def triton_apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     """
     seq_len, n_heads, head_dim = x.shape
     
-    # 必须保证连续内存
+    # 这里通常假设连续内存
     x = x.contiguous()
     cos = cos.contiguous()
     sin = sin.contiguous()
@@ -143,6 +141,7 @@ def triton_apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
         BLOCK_SIZE=BLOCK_SIZE,
     )
     return x
+raise NotImplementedError("请先完成 TODO 代码！")
 ```
 
 
@@ -290,7 +289,7 @@ def triton_apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     """
     seq_len, n_heads, head_dim = x.shape
     
-    # 必须保证连续内存
+    # 这里通常假设连续内存
     x = x.contiguous()
     cos = cos.contiguous()
     sin = sin.contiguous()

@@ -1,4 +1,4 @@
-# 09. Triton Fused LoRA | Triton 进阶算子：Multi-LoRA 融合推理与 Batch 内指针路由 (Punica 思想)
+# 11. Triton Multi LoRA | Triton 进阶算子：Multi-LoRA 融合推理与 Batch 内指针路由 (Punica 思想)
 
 **难度：** Hard | **标签：** `Triton`, `LoRA`, `Punica`, `Serving` | **目标人群：** 核心 Infra 与算子开发
 
@@ -6,13 +6,13 @@
 >
 > 本章节的实战代码可以点击以下链接在免费 GPU 算力平台上直接运行：
 >
-> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/datawhalechina/llm-algo-leetcode/blob/main/03_CUDA_and_Triton_Kernels/09_Triton_Fused_LoRA.ipynb)
+> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/datawhalechina/llm-algo-leetcode/blob/main/03_CUDA_and_Triton_Kernels/11_Triton_Multi_LoRA.ipynb)
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
 在 `02_PyTorch_Algorithms/09_LoRA_Tutorial.ipynb` 中，我们在 PyTorch 层面实现了 LoRA ($h = xW + xAB$) 的逻辑。
-然而，在工业级的大模型推理服务 (Serving) 中，面对并发的多个用户请求，如果每个用户的 prompt 挂载了**不同的** LoRA 权重（如用户 A 请求写代码的 LoRA，用户 B 请求翻译的 LoRA），如果将他们拆分并循环执行 PyTorch 的 `linear()`，会严重降低 GPU 的吞吐量（无法利用 Batch 计算）。
-本节我们将手撕 **Multi-LoRA (如 S-LoRA / Punica 论文核心思路)** 的底层 Triton 融合算子：**通过传入 `lora_indices`，让每一个 Token 在 SRAM 内自动去内存池中拉取它专属的 LoRA 权重，完成批量计算！**
+然而，在工业级的大模型推理服务 (Serving) 中，面对并发的多个用户请求，如果每个用户的 prompt 挂载了**不同的** LoRA 权重（如用户 A 请求写代码的 LoRA，用户 B 请求翻译的 LoRA），如果将它们拆分并循环执行 PyTorch 的 `linear()`，通常会降低 GPU 的吞吐量，也不便于利用 Batch 计算。
+本节我们将实现 **Multi-LoRA (如 S-LoRA / Punica 论文思路)** 的底层 Triton 融合算子：**通过传入 `lora_indices`，让每一个 Token 在 SRAM 内按索引读取它对应的 LoRA 权重，完成批量计算。**
 
 ## 前置
 
@@ -33,17 +33,17 @@
 ### Step 1: Multi-LoRA 内存池与 Batch 路由
 
 > **LoRA 的内存池 (Weight Pool)：**
-> 我们不再为每一个单独的 LoRA 权重分配离散的张量。而是将机器上加载的所有 LoRA 矩阵 A (形状 `r \t\times in_features`) 拼接成一个巨大的连续张量 `lora_a_pool`，形状为 `(num_loras, r, in_features)`。
+> 我们通常不会为每一个单独的 LoRA 权重分配离散的张量，而是将机器上加载的所有 LoRA 矩阵 A (形状 `r \t\times in_features`) 拼接成一个连续张量 `lora_a_pool`，形状为 `(num_loras, r, in_features)`。
 
 > **Token 级别的细粒度路由 (Token-wise Routing)：**
 > 假设输入特征 $X$ 的形状为 `(batch_size, in_features)`。
 > 我们额外传入一个长度为 `batch_size` 的一维整型数组 `lora_indices`。它记录了：当前 Batch 中，第 $i$ 个 Token 到底需要使用 `lora_a_pool` 里的第几个 LoRA 模型。
 
-> **SRAM 内部的极致并行：**
+> **SRAM 内部的块级并行：**
 > - Triton `pid` 处理矩阵 $X$ 的某一行（某个 Token）。
 > - 我们直接在内核里根据 `lora_idx = tl.load(lora_indices + pid)`，算出指向内存池中特定 LoRA A 和 B 的偏移量！
 > - 一次性读取 $X_i$ 和专属的 $A_{idx}, B_{idx}$，在极速的 SRAM 中完成 $X_i \times A \times B$，最后写回 $H_i$。
-> 这样，**原本必须串行计算的不同模型请求，被完美地合并在了一个 Triton Kernel 调用中（Batch Inference）！**
+> 这样，**原本通常需要分别计算的不同模型请求，可以被合并到一个 Triton Kernel 调用中（Batch Inference）**。
 
 ### Step 2: 内存池与 Batch 指针路由
 在推理服务器中，往往存在一个大底座模型对应几百个微调的 LoRA 权重。为了避免切换开销，我们将所有的 LoRA 权重放进统一的巨大的显存池中。每个发来的 Token 请求都会带有一个 `lora_id`。内核利用这个 `lora_id` 充当偏移指针，直接在同一次前向计算中去抓取不同的权重完成点积。
@@ -53,7 +53,7 @@
 
 ###  Step 4: 动手实战
 
-**要求**：请补全下方 `fused_multi_lora_kernel`。我们需要根据传入的 `lora_indices`，正确地在三维张量 `lora_a_pool` 和 `lora_b_pool` 中计算偏移量，并执行点积。为了简化，我们假设秩 `r` 很小（如 8 或 16），且输入只进行列并行分块（行完全塞入 SRAM）。
+**要求**：请补全下方 `fused_multi_lora_kernel`。我们需要根据传入的 `lora_indices`，正确地在三维张量 `lora_a_pool` 和 `lora_b_pool` 中计算偏移量，并执行点积。为了简化，这里假设秩 `r` 较小（如 8 或 16），且输入只进行列并行分块（行方向通常可以一次性放入 SRAM）。
 
 
 ```python
@@ -182,7 +182,7 @@ def test_multi_lora():
         # 构造复杂的请求路由 (Token 0用LoRA_2, Token 1用LoRA_0...)
         lora_indices = torch.tensor([2, 0, 1, 2], device='cuda', dtype=torch.int32)
         
-        # 1. 纯 PyTorch 参考计算 (必须使用极其缓慢的 for 循环拼接)
+        # 1. 纯 PyTorch 参考计算 (为了便于对照，使用较直观的 for 循环拼接)
         out_ref = torch.zeros(batch_size, out_dim, device='cuda')
         for i in range(batch_size):
             idx = lora_indices[i].item()
@@ -196,7 +196,7 @@ def test_multi_lora():
             y_i = h_r @ B.T               # (1, out_dim)
             out_ref[i] = y_i.squeeze(0)
             
-        # 2. Triton 单算子极致并行计算
+        # 2. Triton 单算子块级并行计算
         out_tri = triton_multi_lora_forward(x, lora_a_pool, lora_b_pool, lora_indices)
         
         # 3. 验证结果

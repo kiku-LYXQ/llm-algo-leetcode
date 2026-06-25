@@ -1,4 +1,4 @@
-# 10. Triton KV Cache and PagedAttention | Triton 进阶：PagedAttention 的底层实现 (KV Cache 间接寻址)
+# 09. Triton PagedAttention | Triton 进阶：PagedAttention 的底层实现 (KV Cache 间接寻址)
 
 **难度：** Hard | **标签：** `Triton`, `PagedAttention`, `vLLM` | **目标人群：** 核心 Infra 与算子开发
 
@@ -6,13 +6,13 @@
 >
 > 本章节的实战代码可以点击以下链接在免费 GPU 算力平台上直接运行：
 >
-> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/datawhalechina/llm-algo-leetcode/blob/main/03_CUDA_and_Triton_Kernels/10_Triton_KV_Cache_and_PagedAttention.ipynb)
+> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/datawhalechina/llm-algo-leetcode/blob/main/03_CUDA_and_Triton_Kernels/09_Triton_PagedAttention.ipynb)
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
 在 `02_PyTorch_Algorithms` 章节中，我们用纯 Python 模拟了 PagedAttention 分页管理 KV Cache 的核心思想。
-但在真实的 GPU 硬件上，如何高效地实现**间接寻址 (Indirect Memory Access)**？如何根据 `Block Table` (块映射表) 动态去物理内存池 (Block Pool) 里提取不连续的 K 和 V 块，并在 SRAM 内完成 Online Softmax 归约？
-本节我们将用 Triton 编写一个极简版的 PagedAttention 解码阶段 (Decoding) 前向内核。这也是 vLLM 推理引擎的最核心基石。
+但在真实的 GPU 硬件上，如何实现**间接寻址 (Indirect Memory Access)**？如何根据 `Block Table` (块映射表) 动态去物理内存池 (Block Pool) 里提取不连续的 K 和 V 块，并在 SRAM 内完成 Online Softmax 归约？
+本节我们将用 Triton 编写一个极简版的 PagedAttention 解码阶段 (Decoding) 前向内核。这也是 vLLM 推理引擎的一个重要基石。
 
 ## 前置
 
@@ -49,7 +49,7 @@
 
 ###  Step 4: 动手实战
 
-**要求**：请补全下方 `paged_attention_decoding_kernel`。你需要实现最核心的查表寻址，并计算注意力点积。
+**要求**：请补全下方 `paged_attention_decoding_kernel`。你需要实现查表寻址，并计算注意力点积。
 
 
 ```python

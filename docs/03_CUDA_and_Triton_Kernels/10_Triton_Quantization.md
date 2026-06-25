@@ -1,4 +1,4 @@
-# 11. Triton Quantization Support | Triton 量化算子：W8A16 权重量化融合矩阵乘法 (Quantization GEMM)
+# 10. Triton Quantization | Triton 量化算子：W8A16 权重量化融合矩阵乘法 (Quantization GEMM)
 
 **难度：** Hard | **标签：** `Triton`, `Quantization`, `GPTQ` | **目标人群：** 核心 Infra 与算子开发
 
@@ -6,13 +6,13 @@
 >
 > 本章节的实战代码可以点击以下链接在免费 GPU 算力平台上直接运行：
 >
-> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/datawhalechina/llm-algo-leetcode/blob/main/03_CUDA_and_Triton_Kernels/11_Triton_Quantization_Support.ipynb)
+> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/datawhalechina/llm-algo-leetcode/blob/main/03_CUDA_and_Triton_Kernels/10_Triton_Quantization.ipynb)
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
 在模型部署中，**Weight-Only 量化** (例如 W8A16 或 W4A16) 是最普遍的显存优化手段。由于激活值 (Activation) 依然保持 FP16，所以传统的 PyTorch 需要在计算前显式地把权重反量化回 FP16，这不仅慢，还抵消了显存带来的带宽优势。
 
-以 GPTQ/AWQ 为代表的现代量化框架，底层的核心技术是 **On-the-fly Dequantization (即时反量化)**。
+以 GPTQ/AWQ 为代表的现代量化框架，底层的关键技术之一是 **On-the-fly Dequantization (即时反量化)**。
 本节我们将编写一个 Triton 算子：在 SRAM 中读入 INT8 的权重和 FP16 的缩放因子 (Scales)，在寄存器里动态反量化为 FP16 后，立即与激活值相乘。
 
 ## 前置
@@ -27,7 +27,7 @@
 **导语：** 如果你想先把量化公式和 PyTorch 版本过一遍，可以继续看这页；不影响继续读本节，但会更容易理解即时反量化。
 - [Part 2: 20 Quantization W8A16](../02_PyTorch_Algorithms/20_Quantization_W8A16.md)
 
-### Step 1: 融合反量化矩阵乘法的核心思想
+### Step 1: 融合反量化矩阵乘法的主要思想
 
 > **计算公式：**
 > 输入特征矩阵 $X$ (FP16)，量化权重矩阵 $W_{int8}$ (INT8)，每列的缩放比例 $S$ (FP16)。
@@ -61,7 +61,7 @@ w8a16_gemm_kernel(x_ptr, w_int8_ptr, scales_ptr, y_ptr, M, N, K, ...)
 Grid 划分为 2D：`(ceil(M/BLOCK_M), ceil(N/BLOCK_N))`，每个 Triton Program 负责输出矩阵中一个 `(BLOCK_M, BLOCK_N)` 大小的子块。
 ###  Step 4: 动手实战
 
-**要求**：请补全下方 `w8a16_gemm_kernel`。我们需要将 INT8 的权重即时转为 FP16 并完成矩阵乘法。为了简化，我们使用按列量化 (Per-channel Quantization)。
+**要求**：请补全下方 `w8a16_gemm_kernel`。我们需要将 INT8 的权重即时转为 FP16 并完成矩阵乘法。为了简化，这里使用按列量化 (Per-channel Quantization)。
 
 
 ```python

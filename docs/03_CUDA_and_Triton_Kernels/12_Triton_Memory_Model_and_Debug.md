@@ -12,7 +12,7 @@
 
 在编写 Triton 算子时，最常见的挑战不是构思数学公式，而是遇到 `Segmentation Fault` (显存越界)、脏数据 (Mask 没写对)、或者输出全为 `0` 且一时不容易定位问题。
 与 PyTorch 这种高度抽象的框架不同，Triton 需要你直面 GPU 的物理内存布局（HBM vs SRAM）以及指针偏移计算 (`Stride`)。
-本节我们将深入剖析 Triton 的内存模型，并提供几个"故意写错"的典型算子，让你实战演练 `TRITON_INTERPRET=1` 和 `tl.device_print` 这些关键的 Debug 工具。
+本节我们将深入剖析 Triton 的内存模型，并提供几个"故意写错"的典型算子，让你实战演练 `TRITON_INTERPRET=1` 和 `tl.device_print` 这些常用的 Debug 工具。
 
 ## 前置
 
@@ -141,8 +141,8 @@ def run_debug_simulations():
     # 第二个 block (剩下36个) 的 sum 应该是 36
     assert out_1d[0].item() == 64.0 and out_1d[1].item() == 36.0, f"Bug 2 (Mask) 未修复: 读到了脏数据，求和不正确！得到了 {out_1d}"
     print("✅ Bug 2 修复成功：正确使用了 tl.load 的 other=0.0 处理边界。")
-
 raise NotImplementedError("请先完成 TODO 1-3")
+
 ```
 
 
@@ -268,8 +268,8 @@ def test_memory_debug():
     print("✅ Triton Memory Debug 运行级验证通过")
     return True
 
-if torch.cuda.is_available():
-    test_memory_debug()
+test_memory_debug()
+
 
 ```
 
@@ -294,7 +294,7 @@ if torch.cuda.is_available():
   ```python
   out_start = y_ptr + row_idx * stride_y_row
   ```
-- **关键点**：输出指针的计算方式与输入相同，需要考虑 stride
+- **关键点**：输出指针的计算方式与输入相同，通常需要考虑 stride
 - **技术细节**：
   - 写入操作与读取操作遵循相同的内存布局规则
   - 如果输入和输出的形状相同，通常 `stride_x_row == stride_y_row`
@@ -335,7 +335,7 @@ if torch.cuda.is_available():
   - 在 kernel 内部打印张量值，用于观察中间结果
   - 语法：`tl.device_print("Debug Info:", tensor)`
   - 注意事项：
-    - 建议只在少量数据时使用，否则输出容易刷屏
+    - 只在少量数据时使用，否则输出会刷屏
     - 可以使用条件判断：`if pid == 0: tl.device_print(...)`
     - 打印会影响性能，仅用于调试
   - 适用场景：检查中间计算结果、验证 mask 是否正确、观察数据分布

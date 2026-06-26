@@ -1,13 +1,13 @@
-<h1 align="center"> 大模型算法实战教程 / LLM Algorithm Practice Lab </h1>
+<h1 align="center">大模型算法实战教程</h1>
 
-本项目原名 `LLM-Algo-LeetCode`，现统一更名为“大模型算法实战教程 / LLM Algorithm Practice Lab”。
+本项目原名 `LLM-Algo-LeetCode`，现统一更名为“大模型算法实战教程”。
 
 > [!WARNING]
 > 🧪 Beta公测版本提示：教程主体代码与算子已基本构建完成，正在持续优化文档细节与补充注释。欢迎大家提交 Issue 反馈问题或贡献 PR！
 
-> 大模型算法实战教程 / LLM Algorithm Practice Lab
+> 大模型算法实战教程
 >
-> A practical LLM algorithm tutorial with theory, walkthroughs, test cases, and solutions.
+> A practical tutorial with theory, walkthroughs, test cases, and solutions.
 
 [中文版 (Chinese)](#中文版) | [English Version](#english-version)
 
@@ -17,9 +17,9 @@
 
 ## 🎯 项目简介
 
-这是一个面向大模型入门到进阶的算法实战教程，当前以大语言模型（LLM）为主线，聚焦 Python、PyTorch、Transformer、推理优化、显存管理与 CUDA/Triton 实战。我们把每个知识点做成可运行、可验证、可回顾的 Jupyter Notebook 练习，帮助你从“会看”走到“会写、会调、会优化”。
+这是一个面向大模型入门到进阶的算法实战教程，当前以大语言模型（LLM）为主线，覆盖 Python、PyTorch、Transformer、推理优化、显存管理与 CUDA/Triton 实战。我们把每个知识点整理为可运行、可验证、可回顾的 Jupyter Notebook 练习，帮助你从“会看”走到“会写、会调、会优化”。
 
-本项目配有本地测试用例，支持可反复练习和回顾；当前版本以 LLM 内容为主，不展开 Diffusion 或多模态内容。
+本项目配有本地测试用例，支持反复练习和回顾；当前版本以 LLM 内容为主，不展开 Diffusion 或多模态内容。
 
 ### ✨ 项目特点
 

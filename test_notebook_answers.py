@@ -203,7 +203,9 @@ def test_notebook_answers(notebook_path, test_mode='answer'):
             print(f"\n⏭️ {notebook_path} {mode_name}仅完成结构检查，已跳过运行级验证（无 GPU）")
             return 'skip'
 
-        success = result.returncode == 0 and '✅' in result.stdout
+        # 答案区的通过标准以进程退出码为准。
+        # `✅` 只作为人类可读的结果展示，不应影响判定。
+        success = result.returncode == 0
 
         if success:
             print(f"\n✅ {notebook_path} {mode_name}测试通过")

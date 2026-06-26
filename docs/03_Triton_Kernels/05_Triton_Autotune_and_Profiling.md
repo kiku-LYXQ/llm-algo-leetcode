@@ -67,23 +67,21 @@ import triton.language as tl
 
 
 ```python
-import torch
-import triton
-import triton.language as tl
 
 # ==========================================
-# TODO 1: 添加 triton.autotune 装饰器
+# TODO 1: 设计 autotune 搜索空间
+# 提示：保留 3-4 个代表性配置即可，不需要穷举所有组合
+# 关注点：BLOCK_SIZE 和 num_warps 如何平衡吞吐与并行度
 # ==========================================
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=2),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 4096}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 8192}, num_warps=16),
-    ],
-    key=['n_elements'],
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config({'BLOCK_SIZE': ???}, num_warps=???),
+#         triton.Config({'BLOCK_SIZE': ???}, num_warps=???),
+#         triton.Config({'BLOCK_SIZE': ???}, num_warps=???),
+#     ],
+#     key=['n_elements'],
+# )
+
 @triton.jit
 def vector_add_autotune_kernel(
     x_ptr, y_ptr, out_ptr,
@@ -95,24 +93,29 @@ def vector_add_autotune_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    out = x + y
-    tl.store(out_ptr + offsets, out, mask=mask)
+    # ==========================================
+    # TODO 2: 从 x_ptr 和 y_ptr 中加载对应的数据到 SRAM
+    # ==========================================
+    # x = ???
+    # y = ???
+    pass
+    
+    # ==========================================
+    # TODO 3: 在 SRAM 中进行向量加法
+    # ==========================================
+    # out = ???
+    pass
 
 def add_triton(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     n_elements = x.numel()
     out = torch.empty_like(x)
     
     # ==========================================
-    # TODO 2: 动态计算 grid
+    # TODO 4: 动态计算 grid
     # ==========================================
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    
-    vector_add_autotune_kernel[grid](
-        x, y, out, n_elements
-    )
-    return out
+    # grid = ???
+    pass
+
 raise NotImplementedError("请先完成 TODO 代码！")
 
 ```
@@ -142,13 +145,10 @@ def test_autotune_correctness():
 
 test_autotune_correctness()
 
-```
-
-
-```python
+# ==========================================
 # 运行基准测试并打印结果
+# ==========================================
 # 请在带有 NVIDIA GPU 的机器上运行
-import torch
 import triton
 
 @triton.testing.perf_report(

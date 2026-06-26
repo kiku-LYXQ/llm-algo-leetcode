@@ -76,7 +76,6 @@ import triton.language as tl
 
 
 ```python
-
 # ==========================================
 # Autotune: 搜索空间 (Search Space) 分析
 # 这里列举了 8 种典型的配置组合，由 Triton 在运行时自动 Warmup 并选择最快的一个。
@@ -139,19 +138,22 @@ def matmul_kernel(
         # ==========================================
         # TODO 1: 加载 a 和 b 块，并用 0 填充越界的地方
         # ==========================================
-        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) & k_mask[None, :], other=0.0)
-        b = tl.load(b_ptrs, mask=k_mask[:, None] & (offs_bn[None, :] < N), other=0.0)
+        # a = ???
+        # b = ???
+        pass
 
         # ==========================================
         # TODO 2: 矩阵乘加 (底层调用 Tensor Core)
         # ==========================================
-        accumulator += tl.dot(a, b)
+        # accumulator += ???
+        pass
 
         # ==========================================
         # TODO 3: 推进指针到下一个 K 块
         # ==========================================
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
+        # a_ptrs += ???
+        # b_ptrs += ???
+        pass
 
     # 5. 写入 C 矩阵 (HBM)
     c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]

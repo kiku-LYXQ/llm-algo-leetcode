@@ -67,9 +67,6 @@ import triton.language as tl
 
 
 ```python
-import torch
-import triton
-import triton.language as tl
 
 @triton.jit
 def fused_softmax_kernel(
@@ -94,25 +91,29 @@ def fused_softmax_kernel(
     # ==========================================
     # TODO 1: 寻找当前行的最大值 (安全 Softmax 第一步)
     # ==========================================
-    row_max = tl.max(row, axis=0)
+    # row_max = ???
+    pass
     
     # 减去最大值，避免 exp() 溢出
-    safe_row = row - row_max
+    # safe_row = ???
     
     # ==========================================
     # TODO 2: 计算指数 (Numerator)
     # ==========================================
-    numerator = tl.exp(safe_row)
+    # numerator = ???
+    pass
     
     # ==========================================
     # TODO 3: 求和 (Denominator)
     # ==========================================
-    denominator = tl.sum(numerator, axis=0)
+    # denominator = ???
+    pass
     
     # ==========================================
     # TODO 4: 计算最终输出
     # ==========================================
-    softmax_output = numerator / denominator
+    # softmax_output = ???
+    pass
     
     # 定位输出指针，写回
     output_row_start_ptr = output_ptr + row_idx * output_row_stride
